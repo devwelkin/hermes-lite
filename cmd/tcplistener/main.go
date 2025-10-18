@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+
+	"github.com/devwelkin/hermes-lite/util"
 )
 
 func main() {
@@ -19,7 +21,7 @@ func main() {
 		}
 		fmt.Printf("connection has accepted\n")
 
-		lines := GetLinesChannel(conn)
+		lines := util.GetLinesChannel(conn)
 		for line := range lines {
 			fmt.Printf("%s\n", line)
 		}
