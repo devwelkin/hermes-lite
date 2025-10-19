@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/devwelkin/hermes-lite/internal/headers"
 )
 
 // Custom errors
@@ -25,6 +27,7 @@ const (
 
 type Request struct {
 	RequestLine RequestLine
+	Headers     headers.Headers
 	state       int
 }
 
