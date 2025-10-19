@@ -3,7 +3,7 @@
 package request
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -16,8 +16,16 @@ var (
 	ErrUnsupportedHTTP      = errors.New("unsupported http version")
 )
 
+const (
+	stateRequestLine = iota // 0
+	stateHeaders            // 1
+	stateBody               // 2
+	stateDone               // 3
+)
+
 type Request struct {
 	RequestLine RequestLine
+	state       int
 }
 
 type RequestLine struct {
@@ -27,34 +35,55 @@ type RequestLine struct {
 }
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
-	r := bufio.NewReader(reader)
-
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("could not read request line: %w", err)
-	}
-
-	rqline, err := parseRequestLine(line)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse request line: %w", err)
-	}
-
 	req := &Request{
-		RequestLine: *rqline,
+		state: stateRequestLine,
+	}
+	var accumulatedData []byte
+
+	readBuf := make([]byte, 1024)
+
+	for req.state != stateDone {
+		n, err := reader.Read(readBuf)
+
+		if n > 0 {
+			accumulatedData = append(accumulatedData, readBuf[:n]...)
+		}
+
+		consumed, pErr := req.parse(accumulatedData)
+		if pErr != nil {
+			return nil, pErr
+		}
+
+		if consumed > 0 {
+			accumulatedData = accumulatedData[consumed:]
+		}
+
+		if err == io.EOF {
+			if req.state != stateDone {
+				return nil, io.ErrUnexpectedEOF
+			}
+
+			break
+		}
+
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return req, nil
 }
 
-func parseRequestLine(data string) (*RequestLine, error) {
-	// trim \r\n
-	firstline := strings.TrimSpace(data)
+func parseRequestLine(data []byte) (*RequestLine, int, error) {
+	idx := bytes.Index(data, []byte("\r\n"))
+	if idx == -1 {
+		return nil, 0, nil
+	}
 
-	parts := strings.Split(firstline, " ")
-
+	parts := strings.Split(string(data[:idx]), " ")
 	// panic guard
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("%w: expected 3 parts, got %d", ErrInvalidRequestFormat, len(parts))
+		return nil, 0, fmt.Errorf("%w: expected 3 parts, got %d", ErrInvalidRequestFormat, len(parts))
 	}
 
 	method := parts[0]
@@ -64,7 +93,7 @@ func parseRequestLine(data string) (*RequestLine, error) {
 	http, httpv, ok := strings.Cut(versionRaw, "/")
 
 	if !ok || http != "HTTP" || (httpv != "1.1" && httpv != "1.0") {
-		return nil, fmt.Errorf("%w: expected 'HTTP/1.1', got '%s'", ErrUnsupportedHTTP, versionRaw)
+		return nil, 0, fmt.Errorf("%w: expected 'HTTP/1.1', got '%s'", ErrUnsupportedHTTP, versionRaw)
 	}
 
 	reqLine := RequestLine{
@@ -73,5 +102,32 @@ func parseRequestLine(data string) (*RequestLine, error) {
 		HTTPVersion:   httpv,
 	}
 
-	return &reqLine, nil
+	return &reqLine, idx + 2, nil
+}
+
+func (r *Request) parse(data []byte) (int, error) {
+	switch r.state {
+	case stateRequestLine:
+
+		reqLine, consumed, err := parseRequestLine(data)
+		if err != nil {
+			return 0, fmt.Errorf("failed to parse request line: %w", err)
+		}
+
+		if consumed == 0 {
+			return 0, nil
+		}
+
+		r.RequestLine = *reqLine
+		r.state = stateDone
+
+		return consumed, nil
+
+	case stateDone:
+		return 0, nil
+
+	default:
+
+		return 0, errors.New("invalid parser state")
+	}
 }

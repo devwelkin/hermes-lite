@@ -5,7 +5,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/devwelkin/hermes-lite/util"
+	"github.com/devwelkin/hermes-lite/internal/request"
 )
 
 func main() {
@@ -21,9 +21,13 @@ func main() {
 		}
 		fmt.Printf("connection has accepted\n")
 
-		lines := util.GetLinesChannel(conn)
-		for line := range lines {
-			fmt.Printf("%s\n", line)
+		req, err := request.RequestFromReader(conn)
+		if err != nil {
+			log.Fatal(err)
 		}
+		fmt.Printf(`Request Line:
+- Method: %s
+- Target: %s
+- Version: %s`, req.RequestLine.Method, req.RequestLine.RequestTarget, req.RequestLine.HTTPVersion)
 	}
 }
