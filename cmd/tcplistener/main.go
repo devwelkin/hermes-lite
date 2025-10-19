@@ -19,15 +19,14 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("connection has accepted\n")
 
 		req, err := request.RequestFromReader(conn)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf(`Request Line:
-- Method: %s
-- Target: %s
-- Version: %s`, req.RequestLine.Method, req.RequestLine.RequestTarget, req.RequestLine.HTTPVersion)
+		fmt.Println("Request line:")
+		fmt.Printf("- Method: %s\n", req.RequestLine.Method)
+		fmt.Printf("- Target: %s\n", req.RequestLine.RequestTarget)
+		fmt.Printf("- Version: %s\n", req.RequestLine.HTTPVersion)
 	}
 }
