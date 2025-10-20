@@ -53,13 +53,33 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			accumulatedData = append(accumulatedData, readBuf[:n]...)
 		}
 
-		consumed, pErr := req.parse(accumulatedData)
-		if pErr != nil {
-			return nil, pErr
-		}
+		// --- BEGIN FIX ---
+		// you have to keep parsing the buffer until it's empty
+		// or you're done.
+		for {
+			consumed, pErr := req.parse(accumulatedData)
+			if pErr != nil {
+				return nil, pErr
+			}
 
-		if consumed > 0 {
+			if consumed == 0 {
+				// not enough data in the buffer to parse a full line.
+				// break the *inner* loop to read more data.
+				break
+			}
+
 			accumulatedData = accumulatedData[consumed:]
+
+			if req.state == stateDone {
+				// we're done parsing, break the *inner* loop.
+				break
+			}
+		}
+		// --- END FIX ---
+
+		if req.state == stateDone {
+			// we're done, break the *outer* loop.
+			break
 		}
 
 		if err == io.EOF {
