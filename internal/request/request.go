@@ -39,7 +39,8 @@ type RequestLine struct {
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	req := &Request{
-		state: stateRequestLine,
+		state:   stateRequestLine,
+		Headers: headers.NewHeaders(),
 	}
 	var accumulatedData []byte
 
@@ -122,7 +123,23 @@ func (r *Request) parse(data []byte) (int, error) {
 		}
 
 		r.RequestLine = *reqLine
-		r.state = stateDone
+		r.state = stateHeaders
+
+		return consumed, nil
+	case stateHeaders:
+
+		consumed, done, err := r.Headers.Parse(data)
+		if done {
+			r.state = stateDone
+			return consumed, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+
+		if consumed == 0 {
+			return 0, nil
+		}
 
 		return consumed, nil
 

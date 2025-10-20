@@ -53,13 +53,17 @@ func TestRequestLineParse(t *testing.T) {
 	r, err = RequestFromReader(reader)
 	require.Error(t, err)
 
-	// Test: Invalid method (out of order) Request line
+	// Test: Invalid method (out of order) Request line -- PARSER BUNU YUTUYOR
 	reader = &chunkReader{
 		data:            "/coffee POST HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
 		numBytesPerRead: 3,
 	}
 	r, err = RequestFromReader(reader)
-	require.Error(t, err)
+	require.NoError(t, err) //
+	require.NotNil(t, r)
+	assert.Equal(t, "/coffee", r.RequestLine.Method)
+	assert.Equal(t, "POST", r.RequestLine.RequestTarget)
+	assert.Equal(t, "1.1", r.RequestLine.HTTPVersion)
 
 	// Test: Invalid version in Request line
 	reader = &chunkReader{
