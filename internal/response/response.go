@@ -27,9 +27,10 @@ var reasonPhrases = map[StatusCode]string{
 type writerState int
 
 const (
-	stateStatus  writerState = iota // can write status
-	stateHeaders                    // can write headers
-	stateBody                       // can write body
+	stateStatus   writerState = iota // can write status
+	stateHeaders                     // can write headers
+	stateBody                        // can write body
+	stateTrailers                    // can write trailers
 )
 
 // Writer is a stateful writer for constructing an http response.
@@ -89,16 +90,79 @@ func (w *Writer) WriteHeaders(h headers.Headers) error {
 // WriteBody writes to the response body. can be called multiple times, but
 // only after headers have been written.
 func (w *Writer) WriteBody(p []byte) (int, error) {
-	if w.state < stateHeaders {
-		return 0, errors.New("WriteBody called before headers")
-	}
-	if w.state == stateHeaders {
-		if _, err := w.w.Write([]byte("\r\n")); err != nil {
-			return 0, err
-		}
-		w.state = stateBody
+	if w.state != stateBody {
+		return 0, errors.New("WriteBody called in wrong state")
 	}
 	return w.w.Write(p)
+}
+
+// WriteChunkedBody writes a chunk of data for a chunked response.
+// It writes the chunk size in hex, followed by the data, and a CRLF.
+func (w *Writer) WriteChunkedBody(p []byte) (int, error) {
+	if w.state != stateBody {
+		return 0, errors.New("WriteChunkedBody called in wrong state")
+	}
+
+	// Don't write empty chunks unless it's the final one.
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	// Format: <chunk size in hex>\r\n<chunk data>\r\n
+	chunkHeader := fmt.Sprintf("%x\r\n", len(p))
+	chunkTrailer := "\r\n"
+
+	totalWritten := 0
+
+	n, err := w.w.Write([]byte(chunkHeader))
+	totalWritten += n
+	if err != nil {
+		return totalWritten, err
+	}
+
+	n, err = w.w.Write(p)
+	totalWritten += n
+	if err != nil {
+		return totalWritten, err
+	}
+
+	n, err = w.w.Write([]byte(chunkTrailer))
+	totalWritten += n
+	if err != nil {
+		return totalWritten, err
+	}
+
+	return totalWritten, nil
+}
+
+// WriteChunkedBodyDone writes the zero-length chunk to signal the end
+// of a chunked response body, and prepares for writing trailers.
+func (w *Writer) WriteChunkedBodyDone() (int, error) {
+	if w.state != stateBody {
+		return 0, errors.New("WriteChunkedBodyDone called in wrong state")
+	}
+
+	n, err := w.w.Write([]byte("0\r\n"))
+	w.state = stateTrailers
+	return n, err
+}
+
+// WriteTrailers writes the trailers. Must be called after WriteChunkedBodyDone.
+func (w *Writer) WriteTrailers(h headers.Headers) error {
+	if w.state != stateTrailers {
+		return errors.New("WriteTrailers called in wrong state")
+	}
+
+	for key, val := range h {
+		line := fmt.Sprintf("%s: %s\r\n", key, val)
+		if _, err := w.w.Write([]byte(line)); err != nil {
+			return err
+		}
+	}
+
+	// final crlf to terminate the response
+	_, err := w.w.Write([]byte("\r\n"))
+	return err
 }
 
 // GetDefaultHeaders is still a useful helper for the handler.
