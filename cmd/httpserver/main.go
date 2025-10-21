@@ -1,11 +1,15 @@
 package main
 
 import (
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	"github.com/devwelkin/hermes-lite/internal/headers"
 	"github.com/devwelkin/hermes-lite/internal/request"
 	"github.com/devwelkin/hermes-lite/internal/response"
 	"github.com/devwelkin/hermes-lite/internal/server"
@@ -43,7 +47,81 @@ const (
   </body></html>`
 )
 
+func proxyHandler(w *response.Writer, req *request.Request) {
+	path := strings.TrimPrefix(req.RequestLine.RequestTarget, "/httpbin")
+	targetURL := "https://httpbin.org" + path
+	log.Printf("proxying to %s", targetURL)
+
+	// Make the request to the target server
+	resp, err := http.Get(targetURL)
+	if err != nil {
+		log.Printf("error making request to httpbin: %v", err)
+		// Send an error response back to the client
+		body := []byte(htmlInternalError)
+		h := response.GetDefaultHeaders(len(body))
+		h.Set("Content-Type", "text/html")
+		_ = w.WriteStatusLine(response.StatusInternalServerError)
+		_ = w.WriteHeaders(h)
+		_, _ = w.WriteBody(body)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Prepare headers for the chunked response
+	h := headers.NewHeaders()
+	// Copy headers from httpbin response, but skip Content-Length and Transfer-Encoding
+	for key, values := range resp.Header {
+		lowerKey := strings.ToLower(key)
+		if lowerKey != "content-length" && lowerKey != "transfer-encoding" {
+			h.Set(key, strings.Join(values, ", "))
+		}
+	}
+	h.Set("Transfer-Encoding", "chunked")
+	h.Set("Connection", "close") // good practice for simple servers
+
+	// Write status line and headers
+	if err := w.WriteStatusLine(response.StatusCode(resp.StatusCode)); err != nil {
+		log.Printf("error writing proxy status line: %v", err)
+		return
+	}
+	if err := w.WriteHeaders(h); err != nil {
+		log.Printf("error writing proxy headers: %v", err)
+		return
+	}
+
+	// Stream the body chunk by chunk
+	buf := make([]byte, 1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			log.Printf("read %d bytes from httpbin, writing as chunk", n)
+			if _, writeErr := w.WriteChunkedBody(buf[:n]); writeErr != nil {
+				log.Printf("error writing chunked body: %v", writeErr)
+				break // Stop streaming if we can't write to the client
+			}
+		}
+		if err == io.EOF {
+			break // End of body
+		}
+		if err != nil {
+			log.Printf("error reading from httpbin body: %v", err)
+			break
+		}
+	}
+
+	// Signal end of chunked response
+	if _, err := w.WriteChunkedBodyDone(); err != nil {
+		log.Printf("error writing chunked body done: %v", err)
+	}
+}
+
 func myHandler(w *response.Writer, req *request.Request) {
+	// Route to proxy if the path matches
+	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin/") {
+		proxyHandler(w, req)
+		return
+	}
+
 	var body string
 	var statusCode response.StatusCode
 
