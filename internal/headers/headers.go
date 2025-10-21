@@ -70,3 +70,8 @@ func (h Headers) Get(key string) (string, error) {
 
 	return "", errors.New("key not found")
 }
+
+// Set adds or overwrites a header.
+func (h Headers) Set(key, value string) {
+	h[key] = value
+}

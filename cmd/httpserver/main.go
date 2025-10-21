@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -15,40 +13,70 @@ import (
 
 const port = 42069
 
-// this is our new handler logic
-func myHandler(w io.Writer, req *request.Request) *server.HandlerError {
-	// check the path
+// define the html responses
+const (
+	htmlOK = `<html>
+  <head>
+    <title>200 OK</title>
+  </head>
+  <body>
+    <h1>Success!</h1>
+    <p>Your request was an absolute banger.</p>
+  </body></html>`
+
+	htmlBadRequest = `<html>
+  <head>
+    <title>400 Bad Request</title>
+  </head>
+  <body>
+    <h1>Bad Request</h1>
+    <p>Your request honestly kinda sucked.</p>
+  </body></html>`
+
+	htmlInternalError = `<html>
+  <head>
+    <title>500 Internal Server Error</title>
+  </head>
+  <body>
+    <h1>Internal Server Error</h1>
+    <p>Okay, you know what? This one is on me.</p>
+  </body></html>`
+)
+
+func myHandler(w *response.Writer, req *request.Request) {
+	var body string
+	var statusCode response.StatusCode
+
 	switch req.RequestLine.RequestTarget {
 	case "/yourproblem":
-		// return a 400 error
-		return &server.HandlerError{
-			StatusCode: response.StatusBadRequest,
-			Message:    "Your problem is not my problem\n",
-		}
+		statusCode = response.StatusBadRequest
+		body = htmlBadRequest
 	case "/myproblem":
-		// return a 500 error
-		return &server.HandlerError{
-			StatusCode: response.StatusInternalServerError,
-			Message:    "Woopsie, my bad\n",
-		}
+		statusCode = response.StatusInternalServerError
+		body = htmlInternalError
 	default:
-		// success. write the body to the buffer (w)
-		_, err := w.Write([]byte("All good, frfr\n"))
-		if err != nil {
-			// this is an error writing to the *buffer*,
-			// which is weird. return a 500.
-			return &server.HandlerError{
-				StatusCode: response.StatusInternalServerError,
-				Message:    fmt.Sprintf("error writing to buffer: %v\n", err),
-			}
-		}
-		// return nil for success
-		return nil
+		statusCode = response.StatusOK
+		body = htmlOK
+	}
+
+	bodyBytes := []byte(body)
+	h := response.GetDefaultHeaders(len(bodyBytes))
+	h.Set("Content-Type", "text/html")
+
+	if err := w.WriteStatusLine(statusCode); err != nil {
+		log.Printf("error writing status line: %v", err)
+		return
+	}
+	if err := w.WriteHeaders(h); err != nil {
+		log.Printf("error writing headers: %v", err)
+		return
+	}
+	if _, err := w.WriteBody(bodyBytes); err != nil {
+		log.Printf("error writing body: %v", err)
 	}
 }
 
 func main() {
-	// pass our new handler to server.Serve
 	server, err := server.Serve(port, myHandler)
 	if err != nil {
 		log.Fatalf("Error starting server: %v", err)

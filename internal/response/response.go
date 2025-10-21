@@ -1,6 +1,7 @@
 package response
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -8,10 +9,9 @@ import (
 	"github.com/devwelkin/hermes-lite/internal/headers"
 )
 
-// StatusCode is our "enum" for http status codes.
+// StatusCode and related consts remain the same.
 type StatusCode int
 
-// our supported status codes
 const (
 	StatusOK                  StatusCode = 200
 	StatusBadRequest          StatusCode = 400
@@ -24,46 +24,88 @@ var reasonPhrases = map[StatusCode]string{
 	StatusInternalServerError: "Internal Server Error",
 }
 
-// WriteStatusLine writes the http status line (e.g., HTTP/1.1 200 OK)
-func WriteStatusLine(w io.Writer, statusCode StatusCode) error {
+type writerState int
+
+const (
+	stateStatus  writerState = iota // can write status
+	stateHeaders                    // can write headers
+	stateBody                       // can write body
+)
+
+// Writer is a stateful writer for constructing an http response.
+type Writer struct {
+	w     io.Writer   // connection
+	state writerState // state machine
+}
+
+// NewWriter creates a new response Writer.
+func NewWriter(w io.Writer) *Writer {
+	return &Writer{
+		w:     w,
+		state: stateStatus,
+	}
+}
+
+// WriteStatusLine writes the status line. can only be called once, and first.
+func (w *Writer) WriteStatusLine(statusCode StatusCode) error {
+	if w.state != stateStatus {
+		return errors.New("WriteStatusLine called in wrong state")
+	}
 	reason, ok := reasonPhrases[statusCode]
 	if !ok {
-		// rfc 9112: "a server must send the space that separates the
-		// status-code from the reason-phrase even when the
-		// reason-phrase is absent"
 		reason = ""
 	}
-
-	// e.g., "HTTP/1.1 200 OK\r\n"
-	// or "HTTP/1.1 404 \r\n" if 404 wasn't in our map
 	statusLine := fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, reason)
 
-	_, err := w.Write([]byte(statusLine))
-	return err
-}
-
-// GetDefaultHeaders returns the headers we (almost) always want.
-func GetDefaultHeaders(contentLen int) headers.Headers {
-	return headers.Headers{
-		// prompt says text/plain, no charset.
-		"Content-Type":   "text/plain",
-		"Connection":     "close", // we don't do keep-alive yet
-		"Content-Length": strconv.Itoa(contentLen),
+	if _, err := w.w.Write([]byte(statusLine)); err != nil {
+		return err
 	}
+	w.state = stateHeaders
+	return nil
 }
 
-// WriteHeaders writes all headers to the writer, followed by the
-// terminating crlf.
-func WriteHeaders(w io.Writer, h headers.Headers) error {
-	// write each header line
+// WriteHeaders writes the headers. must be called after status and before body.
+func (w *Writer) WriteHeaders(h headers.Headers) error {
+	if w.state != stateHeaders {
+		return errors.New("WriteHeaders called in wrong state")
+	}
+
 	for key, val := range h {
 		line := fmt.Sprintf("%s: %s\r\n", key, val)
-		if _, err := w.Write([]byte(line)); err != nil {
+		if _, err := w.w.Write([]byte(line)); err != nil {
 			return err
 		}
 	}
 
-	// write the final crlf to separate headers from body
-	_, err := w.Write([]byte("\r\n"))
-	return err
+	// final crlf to separate headers from body
+	if _, err := w.w.Write([]byte("\r\n")); err != nil {
+		return err
+	}
+
+	w.state = stateBody
+	return nil
+}
+
+// WriteBody writes to the response body. can be called multiple times, but
+// only after headers have been written.
+func (w *Writer) WriteBody(p []byte) (int, error) {
+	if w.state < stateHeaders {
+		return 0, errors.New("WriteBody called before headers")
+	}
+	if w.state == stateHeaders {
+		if _, err := w.w.Write([]byte("\r\n")); err != nil {
+			return 0, err
+		}
+		w.state = stateBody
+	}
+	return w.w.Write(p)
+}
+
+// GetDefaultHeaders is still a useful helper for the handler.
+func GetDefaultHeaders(contentLen int) headers.Headers {
+	return headers.Headers{
+		"Content-Type":   "text/plain",
+		"Connection":     "close",
+		"Content-Length": strconv.Itoa(contentLen),
+	}
 }
