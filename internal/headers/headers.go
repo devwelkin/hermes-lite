@@ -60,3 +60,13 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 
 	return idx + 2, false, nil
 }
+
+func (h Headers) Get(key string) (string, error) {
+	value, ok := h[key]
+
+	if ok {
+		return value, nil
+	}
+
+	return "", errors.New("key not found")
+}

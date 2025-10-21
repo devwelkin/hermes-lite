@@ -43,6 +43,8 @@ func handleConnection(conn net.Conn) {
 	for key, value := range req.Headers {
 		fmt.Printf("- %s: %s\n", key, value)
 	}
+	fmt.Println("Body:")
+	fmt.Printf("%s", req.Body)
 	fmt.Println("--- end of request ---")
 
 	conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"))

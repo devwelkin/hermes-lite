@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/devwelkin/hermes-lite/internal/headers"
@@ -29,6 +30,7 @@ type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
 	state       int
+	Body        []byte
 }
 
 type RequestLine struct {
@@ -53,16 +55,14 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			accumulatedData = append(accumulatedData, readBuf[:n]...)
 		}
 
-		// --- BEGIN FIX ---
-		// you have to keep parsing the buffer until it's empty
-		// or you're done.
+		// keep parsing the buffer until it's empty
 		for {
 			consumed, pErr := req.parse(accumulatedData)
 			if pErr != nil {
 				return nil, pErr
 			}
 
-			if consumed == 0 {
+			if consumed == 0 && req.state != stateDone {
 				// not enough data in the buffer to parse a full line.
 				// break the *inner* loop to read more data.
 				break
@@ -71,22 +71,21 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			accumulatedData = accumulatedData[consumed:]
 
 			if req.state == stateDone {
-				// we're done parsing, break the *inner* loop.
+				// break the *inner* loop.
 				break
 			}
 		}
-		// --- END FIX ---
 
 		if req.state == stateDone {
-			// we're done, break the *outer* loop.
+			// break the *outer* loop.
 			break
 		}
 
 		if err == io.EOF {
+			// If we hit EOF but we are not done parsing, it's an unexpected EOF.
 			if req.state != stateDone {
 				return nil, io.ErrUnexpectedEOF
 			}
-
 			break
 		}
 
@@ -132,7 +131,6 @@ func parseRequestLine(data []byte) (*RequestLine, int, error) {
 func (r *Request) parse(data []byte) (int, error) {
 	switch r.state {
 	case stateRequestLine:
-
 		reqLine, consumed, err := parseRequestLine(data)
 		if err != nil {
 			return 0, fmt.Errorf("failed to parse request line: %w", err)
@@ -144,30 +142,69 @@ func (r *Request) parse(data []byte) (int, error) {
 
 		r.RequestLine = *reqLine
 		r.state = stateHeaders
-
 		return consumed, nil
-	case stateHeaders:
 
+	case stateHeaders:
 		consumed, done, err := r.Headers.Parse(data)
-		if done {
-			r.state = stateDone
-			return consumed, nil
-		}
 		if err != nil {
 			return 0, err
 		}
 
-		if consumed == 0 {
+		if consumed > 0 {
+			if done {
+				r.state = stateBody
+			}
+			return consumed, nil
+		}
+
+		return 0, nil
+
+	case stateBody:
+		value, ok := r.Headers["content-length"]
+		if !ok {
+			// No content-length
+			r.state = stateDone
 			return 0, nil
 		}
 
-		return consumed, nil
+		contentLength, err := strconv.Atoi(value)
+		if err != nil {
+			// A malformed content-length is a client error.
+			return 0, fmt.Errorf("invalid content-length value: %q", value)
+		}
+
+		if contentLength == 0 {
+			r.state = stateDone
+			return 0, nil
+		}
+
+		// How much of the body we still need to read.
+		needed := contentLength - len(r.Body)
+
+		// How much we can actually read from the current data buffer.
+		canRead := len(data)
+
+		// We will consume the smaller of the two values.
+		toConsume := needed
+		if canRead < needed {
+			toConsume = canRead
+		}
+
+		// Append the consumed part to the body.
+		r.Body = append(r.Body, data[:toConsume]...)
+
+		// If we've read the entire body, we're done.
+		if len(r.Body) == contentLength {
+			r.state = stateDone
+		}
+
+		// Return the number of bytes we actually consumed from the 'data' buffer.
+		return toConsume, nil
 
 	case stateDone:
 		return 0, nil
 
 	default:
-
 		return 0, errors.New("invalid parser state")
 	}
 }
